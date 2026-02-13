@@ -47,6 +47,11 @@ export async function getOrder(id) {
   return rows[0] || null;
 }
 
+export async function getPendingOrders() {
+  const { rows } = await pool.query("SELECT * FROM orders WHERE status = 'aguardando_deposito'");
+  return rows;
+}
+
 export async function updateOrderStatus(id, status, extra = {}) {
   const { txHash, error, depositTx, depositAmount } = extra;
   await pool.query(
@@ -77,7 +82,42 @@ export async function nextDerivationIndex() {
   return rows[0]?.idx ?? 0;
 }
 
+export async function getCursor(network) {
+  const { rows } = await pool.query('SELECT last_block FROM onchain_cursor WHERE network = $1 LIMIT 1', [network]);
+  return rows[0]?.last_block || null;
+}
+
+export async function saveCursor(network, lastBlock) {
+  await pool.query(
+    `INSERT INTO onchain_cursor (network, last_block) VALUES ($1,$2)
+     ON CONFLICT (network) DO UPDATE SET last_block = EXCLUDED.last_block, updated_at = now()`,
+    [network, lastBlock]
+  );
+}
+
 export async function getPendingOrders() {
   const { rows } = await pool.query("SELECT * FROM orders WHERE status = 'aguardando_deposito'");
   return rows;
+}
+
+export async function createSweep(data) {
+  const { rows } = await pool.query(
+    `INSERT INTO sweeps (id, child_index, from_addr, to_addr, amount, status)
+     VALUES (gen_random_uuid(), $1, $2, $3, $4, 'pending')
+     RETURNING *`,
+    [data.childIndex, data.fromAddr, data.toAddr, data.amount]
+  );
+  return rows[0];
+}
+
+export async function listPendingSweeps() {
+  const { rows } = await pool.query("SELECT * FROM sweeps WHERE status = 'pending'");
+  return rows;
+}
+
+export async function markSweep(id, status, txHash = null) {
+  await pool.query(
+    `UPDATE sweeps SET status = $2, tx_hash = COALESCE($3, tx_hash), updated_at = now() WHERE id = $1`,
+    [id, status, txHash]
+  );
 }
