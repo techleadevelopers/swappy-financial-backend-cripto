@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { config } from './config.js';
 import { publish } from './queue.js';
 import { getCachedPrice } from './workers/priceWorker.js';
-import { createOrder, getOrder, updateOrderStatus, nextDerivationIndex, createSweep, addEvent, hasEvent } from './db.js';
+import { createOrder, getOrder, updateOrderStatus, nextDerivationIndex, createSweep, addEvent, hasEvent, statsPixLast24h, countCompletedOrdersForPix } from './db.js';
 import { httpLogger } from './logger.js';
 import { deriveTronAddress, isTronAddress, tronWeb } from './tron.js';
 
@@ -73,6 +73,9 @@ app.post('/api/order', orderLimiter, async (req, res) => {
     asset: z.string().optional(),
     pixCpf: z.string().optional(),
     pixPhone: z.string().optional(),
+  }).refine(data => data.pixCpf || data.pixPhone, {
+    message: 'pixCpf ou pixPhone é obrigatório',
+    path: ['pix']
   });
 
   const parseResult = OrderSchema.safeParse(req.body);
@@ -91,26 +94,26 @@ app.post('/api/order', orderLimiter, async (req, res) => {
     return res.status(400).json({ error: `Valor fora dos limites (${config.orderMinBrl} - ${config.orderMaxBrl} BRL)` });
   }
 
+  // Velocity / abuso por chave PIX
+  const pixStats = await statsPixLast24h(pixCpf, pixPhone);
+  if (pixStats.count >= config.pixMaxOrders24h) {
+    return res.status(429).json({ error: 'Limite de ordens por 24h excedido para esta chave PIX' });
+  }
+  if (pixStats.total + amountBRL > config.pixMaxBrl24h) {
+    return res.status(429).json({ error: 'Limite de valor diário por chave PIX excedido' });
+  }
+
   let depositAddress = address;
   let derivationIndex = null;
-  if (normalizedNetwork === 'TRON') {
-    if (!depositAddress) {
-      derivationIndex = await nextDerivationIndex();
-      try {
-        depositAddress = deriveTronAddress(derivationIndex);
-      } catch (e) {
-        return res.status(500).json({ error: 'Falha ao derivar endereço TRON', details: e.message });
-      }
-    } else if (!isTronAddress(depositAddress)) {
-      return res.status(400).json({ error: 'Endereço TRON inválido' });
+  if (!depositAddress) {
+    derivationIndex = await nextDerivationIndex();
+    try {
+      depositAddress = deriveTronAddress(derivationIndex);
+    } catch (e) {
+      return res.status(500).json({ error: 'Falha ao derivar endereço TRON', details: e.message });
     }
-  } else {
-    if (!depositAddress) return res.status(400).json({ error: 'Endereço obrigatório' });
-    const isEth = /^0x[a-fA-F0-9]{40}$/.test(depositAddress);
-    const isBtc = /^(bc1|[13])[a-zA-HJ-NP-Z0-9]{20,}$/i.test(depositAddress);
-    if (!isEth && !isBtc) {
-      return res.status(400).json({ error: 'Endereço inválido (BTC bech32/legacy ou Ethereum 0x...)' });
-    }
+  } else if (!isTronAddress(depositAddress)) {
+    return res.status(400).json({ error: 'Endereço TRON inválido' });
   }
 
   const btcRate = await getCachedPrice();
@@ -136,6 +139,12 @@ app.post('/api/order', orderLimiter, async (req, res) => {
   };
 
   await createOrder(order);
+  await addEvent(order.id, 'order.meta', {
+    ip: req.ip,
+    userAgent: req.headers['user-agent'],
+    pixCpf,
+    pixPhone
+  });
   publish('order.created', order);
 
   res.json({
