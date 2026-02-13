@@ -19,7 +19,17 @@ const EnvSchema = z.object({
   RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().positive().default(100),
   ORDER_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60_000),
-  ORDER_RATE_LIMIT_MAX: z.coerce.number().positive().default(20)
+  ORDER_RATE_LIMIT_MAX: z.coerce.number().positive().default(20),
+  // Tron / PagBank
+  TRON_FULLNODE_URL: z.string().url().optional(),
+  TRON_SOLIDITY_URL: z.string().url().optional(),
+  TRON_USDT_CONTRACT: z.string().optional(),
+  TRON_USDT_DECIMALS: z.coerce.number().int().positive().default(6),
+  TRON_CONFIRMATIONS: z.coerce.number().int().positive().default(20),
+  TRON_XPUB: z.string().optional(),
+  TRON_HMAC_SECRET: z.string().optional(),
+  PAGSEGURO_API_TOKEN: z.string().optional(),
+  PAGSEGURO_API_BASE_URL: z.string().optional()
 });
 
 const env = EnvSchema.parse(process.env);
@@ -40,5 +50,14 @@ export const config = {
   rateLimitWindowMs: env.RATE_LIMIT_WINDOW_MS,
   rateLimitMax: env.RATE_LIMIT_MAX,
   orderRateLimitWindowMs: env.ORDER_RATE_LIMIT_WINDOW_MS,
-  orderRateLimitMax: env.ORDER_RATE_LIMIT_MAX
+  orderRateLimitMax: env.ORDER_RATE_LIMIT_MAX,
+  tronFullNodeUrl: env.TRON_FULLNODE_URL,
+  tronSolidityUrl: env.TRON_SOLIDITY_URL,
+  tronUsdtContract: env.TRON_USDT_CONTRACT,
+  tronUsdtDecimals: env.TRON_USDT_DECIMALS,
+  tronConfirmations: env.TRON_CONFIRMATIONS,
+  tronXpub: env.TRON_XPUB,
+  tronHmacSecret: env.TRON_HMAC_SECRET,
+  pagSeguroToken: env.PAGSEGURO_API_TOKEN,
+  pagSeguroBaseUrl: env.PAGSEGURO_API_BASE_URL || 'https://api.pagseguro.com'
 };
