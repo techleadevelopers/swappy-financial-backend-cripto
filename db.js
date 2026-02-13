@@ -95,11 +95,6 @@ export async function saveCursor(network, lastBlock) {
   );
 }
 
-export async function getPendingOrders() {
-  const { rows } = await pool.query("SELECT * FROM orders WHERE status = 'aguardando_deposito'");
-  return rows;
-}
-
 export async function createSweep(data) {
   const { rows } = await pool.query(
     `INSERT INTO sweeps (id, child_index, from_addr, to_addr, amount, status)
