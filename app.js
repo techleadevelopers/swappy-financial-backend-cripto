@@ -9,9 +9,9 @@ import { z } from 'zod';
 import { config } from './config.js';
 import { publish } from './queue.js';
 import { getCachedPrice } from './workers/priceWorker.js';
-import { createOrder, getOrder, updateOrderStatus, nextDerivationIndex } from './db.js';
+import { createOrder, getOrder, updateOrderStatus, nextDerivationIndex, createSweep } from './db.js';
 import { httpLogger } from './logger.js';
-import { deriveTronAddress, isTronAddress } from './tron.js';
+import { deriveTronAddress, isTronAddress, tronWeb } from './tron.js';
 
 export const app = express();
 app.use(helmet());
@@ -209,6 +209,33 @@ app.post('/api/pix/webhook', (req, res) => {
   op.then(() => res.json({ ok: true })).catch(() => res.status(500).json({ error: 'Falha ao atualizar ordem' }));
 });
 
+// Endpoint interno para registrar sweep (stub) - protegido por HMAC
+app.post('/internal/sweep', (req, res) => {
+  const secret = config.tronHmacSecret;
+  if (!secret) return res.status(400).json({ error: 'TRON_HMAC_SECRET não configurado' });
+  const signature = req.headers['x-internal-hmac'];
+  const raw = req.rawBody || Buffer.from('');
+  const hmac = crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  if (signature !== hmac) return res.status(401).json({ error: 'Assinatura inválida' });
+  const schema = z.object({
+    childIndex: z.number().int().nonnegative(),
+    toAddr: z.string().min(10),
+    amount: z.number().positive(),
+    network: z.string().default('TRON')
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Payload inválido', details: parsed.error.issues });
+  const fromAddr = deriveTronAddress(parsed.data.childIndex);
+  createSweep({
+    childIndex: parsed.data.childIndex,
+    fromAddr,
+    toAddr: parsed.data.toAddr,
+    amount: parsed.data.amount
+  })
+    .then(sweep => res.json({ ok: true, sweepId: sweep.id }))
+    .catch(err => res.status(500).json({ error: 'Erro ao criar sweep', details: err.message }));
+});
+
 // SSE de status
 app.get('/api/order/:id/stream', async (req, res) => {
   res.set({
@@ -239,8 +266,9 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/readyz', async (_req, res) => {
   try {
     await getOrder('00000000-0000-0000-0000-000000000000');
-    res.json({ ok: true, db: true });
-  } catch {
-    res.status(500).json({ ok: false, db: false });
+    await tronWeb.trx.getCurrentBlock();
+    res.json({ ok: true, db: true, tron: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, db: false, tron: false, error: e.message });
   }
 });
