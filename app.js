@@ -9,8 +9,9 @@ import { z } from 'zod';
 import { config } from './config.js';
 import { publish } from './queue.js';
 import { getCachedPrice } from './workers/priceWorker.js';
-import { createOrder, getOrder, updateOrderStatus } from './db.js';
+import { createOrder, getOrder, updateOrderStatus, nextDerivationIndex } from './db.js';
 import { httpLogger } from './logger.js';
+import { deriveTronAddress, isTronAddress } from './tron.js';
 
 export const app = express();
 app.use(helmet());
@@ -19,7 +20,9 @@ app.use(rateLimit({
   max: config.rateLimitMax
 }));
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf; }
+}));
 app.use(httpLogger);
 
 const orderLimiter = rateLimit({
@@ -56,7 +59,7 @@ app.get('/api/price', async (_req, res) => {
 app.post('/api/order', orderLimiter, async (req, res) => {
   const OrderSchema = z.object({
     amountBRL: z.number().positive(),
-    address: z.string().min(1),
+    address: z.string().min(1).optional(),
     paymentMethod: z.string().optional(),
     network: z.string().optional(),
     asset: z.string().optional(),
@@ -68,20 +71,36 @@ app.post('/api/order', orderLimiter, async (req, res) => {
   if (!parseResult.success) {
     return res.status(400).json({ error: 'Parâmetros inválidos', details: parseResult.error.issues });
   }
-  const { amountBRL, address, network = 'ERC20', asset = 'USDT', pixCpf, pixPhone } = parseResult.data;
+  const { amountBRL, address, network = 'TRON', asset = 'USDT', pixCpf, pixPhone } = parseResult.data;
 
   if (amountBRL < config.orderMinBrl || amountBRL > config.orderMaxBrl) {
     return res.status(400).json({ error: `Valor fora dos limites (${config.orderMinBrl} - ${config.orderMaxBrl} BRL)` });
   }
 
-  const isEth = /^0x[a-fA-F0-9]{40}$/.test(address);
-  const isBtc = /^(bc1|[13])[a-zA-HJ-NP-Z0-9]{20,}$/i.test(address);
-  if (!isEth && !isBtc) {
-    return res.status(400).json({ error: 'Endereço inválido (BTC bech32/legacy ou Ethereum 0x...)' });
+  let depositAddress = address;
+  let derivationIndex = null;
+  if (network === 'TRON') {
+    if (!depositAddress) {
+      derivationIndex = await nextDerivationIndex();
+      try {
+        depositAddress = deriveTronAddress(derivationIndex);
+      } catch (e) {
+        return res.status(500).json({ error: 'Falha ao derivar endereço TRON', details: e.message });
+      }
+    } else if (!isTronAddress(depositAddress)) {
+      return res.status(400).json({ error: 'Endereço TRON inválido' });
+    }
+  } else {
+    if (!depositAddress) return res.status(400).json({ error: 'Endereço obrigatório' });
+    const isEth = /^0x[a-fA-F0-9]{40}$/.test(depositAddress);
+    const isBtc = /^(bc1|[13])[a-zA-HJ-NP-Z0-9]{20,}$/i.test(depositAddress);
+    if (!isEth && !isBtc) {
+      return res.status(400).json({ error: 'Endereço inválido (BTC bech32/legacy ou Ethereum 0x...)' });
+    }
   }
 
   const btcRate = await getCachedPrice();
-  const btcAmount = amountBRL / btcRate; // mantém nome legado, mas representa USDT->BRL
+  const btcAmount = amountBRL / btcRate; // mantém nome legado, representa USDT
   const id = uuidv4();
 
   const order = {
@@ -89,7 +108,7 @@ app.post('/api/order', orderLimiter, async (req, res) => {
     status: 'aguardando_deposito',
     amountBRL,
     btcAmount,
-    address,
+    address: depositAddress,
     asset,
     network,
     rateLocked: btcRate,
@@ -98,7 +117,8 @@ app.post('/api/order', orderLimiter, async (req, res) => {
     pixKey: 'chavepix@nexswap.com',
     qrCodeUrl: '/images/qrcode.png',
     pixCpf,
-    pixPhone
+    pixPhone,
+    derivationIndex
   };
 
   await createOrder(order);
@@ -110,7 +130,9 @@ app.post('/api/order', orderLimiter, async (req, res) => {
     rate: btcRate,
     status: order.status,
     pixKey: order.pixKey,
-    qrCodeUrl: order.qrCodeUrl
+    qrCodeUrl: order.qrCodeUrl,
+    depositAddress,
+    network
   });
 });
 
@@ -139,6 +161,7 @@ app.post('/api/order/:id/deposit', async (req, res) => {
   }
   await updateOrderStatus(order.id, 'pago', { depositTx: parsed.data.txHash, depositAmount: parsed.data.amount });
   publish('onchain.detected', { orderId: order.id, txHash: parsed.data.txHash, amount: parsed.data.amount });
+  publish('payout.requested', { orderId: order.id });
   res.json({ ok: true });
 });
 
@@ -165,13 +188,25 @@ app.post('/api/order/:id/payout', async (req, res) => {
   res.json({ ok: true });
 });
 
-// Webhook PIX (PagBank) stub com verificação HMAC
-app.post('/api/pix/webhook', express.raw({ type: '*/*' }), (req, res) => {
+// Webhook PIX (PagBank) com HMAC e idempotência básica
+app.post('/api/pix/webhook', (req, res) => {
   if (!config.webhookSecret) return res.status(400).json({ error: 'WEBHOOK_SECRET não configurado' });
   const signature = req.headers['x-pagbank-signature'];
-  const hmac = crypto.createHmac('sha256', config.webhookSecret).update(req.body).digest('hex');
+  const raw = req.rawBody || Buffer.from('');
+  const hmac = crypto.createHmac('sha256', config.webhookSecret).update(raw).digest('hex');
   if (signature !== hmac) return res.status(401).json({ error: 'Assinatura inválida' });
-  res.json({ received: true });
+  let payload;
+  try { payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body; }
+  catch { return res.status(400).json({ error: 'JSON inválido' }); }
+  const { orderId, status, providerId, error } = payload || {};
+  if (!orderId || !status) return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
+  const statusNorm = status.toLowerCase();
+  const op = statusNorm.startsWith('concl') ? updateOrderStatus(orderId, 'concluída', { txHash: providerId || 'pix-webhook' })
+    : statusNorm === 'erro' || statusNorm === 'error'
+      ? updateOrderStatus(orderId, 'erro', { error: error || 'payout erro' })
+      : null;
+  if (!op) return res.status(400).json({ error: 'Status desconhecido' });
+  op.then(() => res.json({ ok: true })).catch(() => res.status(500).json({ error: 'Falha ao atualizar ordem' }));
 });
 
 // SSE de status
