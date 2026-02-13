@@ -73,6 +73,14 @@ export async function addEvent(orderId, type, payload) {
   );
 }
 
+export async function hasEvent(orderId, type, field, value) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM order_events WHERE order_id = $1 AND type = $2 AND payload ->> $3 = $4 LIMIT 1`,
+    [orderId, type, field, value]
+  );
+  return rows.length > 0;
+}
+
 export async function closePool() {
   await pool.end();
 }
