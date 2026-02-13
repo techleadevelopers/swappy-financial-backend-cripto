@@ -2,7 +2,7 @@ import TronWebPkg from 'tronweb';
 import { publish } from '../queue.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
-import { updateOrderStatus, getPendingOrders, getCursor, saveCursor } from '../db.js';
+import { updateOrderStatus, getPendingOrders, getCursor, saveCursor, hasEvent, countCompletedOrdersForPix } from '../db.js';
 
 const TronWeb = TronWebPkg?.TronWeb || TronWebPkg?.default?.TronWeb || TronWebPkg;
 const tronWeb = new TronWeb({
@@ -38,15 +38,40 @@ async function processTransferEvents(ordersByAddress, latestConfirmedBlock) {
         const toAddr = tronWeb.address.fromHex(ev.result.to);
         const order = ordersByAddress.get(toAddr);
         if (!order || (order.status && order.status !== 'aguardando_deposito')) continue;
+        // Expiração: usa rate_lock_expires_at como TTL da ordem
+        if (order.rate_lock_expires_at && new Date(order.rate_lock_expires_at) < new Date()) {
+          await updateOrderStatus(order.id, 'expirada', { error: 'Ordem expirada' });
+          ordersByAddress.delete(toAddr);
+          continue;
+        }
         const decimals = config.tronUsdtDecimals || 6;
         const amount = Number(ev.result.value) / (10 ** decimals);
         const expected = Number(order.btc_amount ?? order.btcAmount ?? 0);
-        if (amount + 1e-6 < expected) continue;
+        const tolerance = config.tronDepositTolerancePct || 0.02;
+        const min = expected * (1 - tolerance);
+        const max = expected * (1 + tolerance);
+        if (amount < min || amount > max) {
+          await updateOrderStatus(order.id, 'aguardando_validacao', { error: 'Depósito fora da faixa' });
+          ordersByAddress.delete(toAddr);
+          continue;
+        }
         const confs = latestConfirmedBlock - ev.block_number;
         if (confs < 0) continue;
+        const duplicate = await hasEvent(order.id, 'order.pago', 'depositTx', ev.transaction_id);
+        if (duplicate) {
+          ordersByAddress.delete(toAddr);
+          continue;
+        }
         await updateOrderStatus(order.id, 'pago', { depositTx: ev.transaction_id, depositAmount: amount });
         publish('onchain.detected', { orderId: order.id, txHash: ev.transaction_id, amount });
-        publish('payout.requested', { orderId: order.id });
+
+        // Delay inteligente para primeira ordem dessa chave PIX
+        const isFirst = (await countCompletedOrdersForPix(order.pix_cpf, order.pix_phone)) === 0;
+        if (isFirst && config.orderHoldSecForNewDest > 0) {
+          setTimeout(() => publish('payout.requested', { orderId: order.id }), config.orderHoldSecForNewDest * 1000);
+        } else {
+          publish('payout.requested', { orderId: order.id });
+        }
         ordersByAddress.delete(toAddr);
       }
       fingerprint = result?.meta?.fingerprint;
