@@ -16,9 +16,10 @@ export function startPayoutWorker() {
         publish('payout.settled', { orderId: order.id, pixStatus: 'concluída' });
         return;
       }
+      const brlValue = Number(order.amount_brl ?? order.amountBRL ?? 0);
       const payload = {
         txId: order.id,
-        value: { currency: 'BRL', amount: Number(order.amount_brl || order.amount_brl) || Number(order.amount_brl) || 0 },
+        value: { currency: 'BRL', amount: brlValue },
         payer: { name: 'Cliente', taxId: order.pix_cpf || '00000000000' },
         key: order.pix_phone || order.pix_cpf || 'chave@pix.com',
         description: 'Off-ramp USDT->PIX'
