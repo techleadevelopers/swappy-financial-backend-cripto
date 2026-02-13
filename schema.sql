@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS orders (
   deposit_tx TEXT,
   deposit_amount NUMERIC(28,8),
   pix_cpf TEXT,
-  pix_phone TEXT
+  pix_phone TEXT,
+  derivation_index INT
 );
 
 -- Eventos para auditoria e reconciliação
@@ -38,3 +39,11 @@ CREATE TABLE IF NOT EXISTS payouts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Compatibilidade: adiciona coluna se jÃ¡ existir tabela anterior
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='derivation_index') THEN
+    ALTER TABLE orders ADD COLUMN derivation_index INT;
+  END IF;
+END$$;
