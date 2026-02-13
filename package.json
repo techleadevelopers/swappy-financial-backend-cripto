@@ -1,19 +1,15 @@
 {
-  "name": "vite",
+  "name": "swappy-backend",
   "type": "module",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "serve": "vite preview",
-    "start": "node server/server.js"
+    "start": "node server.js",
+    "test": "vitest"
   },
   "dependencies": {
-    "@fontsource/inter": "^5.2.5",
     "axios": "^1.9.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
-    "ethers": "^6.13.7",
     "express": "^5.1.0",
     "express-rate-limit": "^7.3.0",
     "helmet": "^7.1.0",
@@ -23,6 +19,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "vite": "^6.3.4"
+    "supertest": "^6.3.4",
+    "vitest": "^1.6.0"
   }
 }
