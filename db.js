@@ -52,6 +52,51 @@ export async function getPendingOrders() {
   return rows;
 }
 
+export async function statsPixLast24h(pixCpf, pixPhone) {
+  const params = [];
+  const conds = [];
+  if (pixCpf) {
+    params.push(pixCpf);
+    conds.push(`pix_cpf = $${params.length}`);
+  }
+  if (pixPhone) {
+    params.push(pixPhone);
+    conds.push(`pix_phone = $${params.length}`);
+  }
+  if (!conds.length) return { count: 0, total: 0 };
+  const where = conds.join(' OR ');
+  params.push(new Date(Date.now() - 24 * 60 * 60 * 1000));
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS count, COALESCE(SUM(amount_brl),0)::numeric AS total
+     FROM orders
+     WHERE (${where}) AND created_at >= $${params.length}`,
+    params
+  );
+  return { count: rows[0]?.count ?? 0, total: Number(rows[0]?.total ?? 0) };
+}
+
+export async function countCompletedOrdersForPix(pixCpf, pixPhone) {
+  const params = [];
+  const conds = [];
+  if (pixCpf) {
+    params.push(pixCpf);
+    conds.push(`pix_cpf = $${params.length}`);
+  }
+  if (pixPhone) {
+    params.push(pixPhone);
+    conds.push(`pix_phone = $${params.length}`);
+  }
+  if (!conds.length) return 0;
+  const where = conds.join(' OR ');
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS count
+     FROM orders
+     WHERE (${where}) AND status = 'concluída'`,
+    params
+  );
+  return rows[0]?.count ?? 0;
+}
+
 export async function updateOrderStatus(id, status, extra = {}) {
   const { txHash, error, depositTx, depositAmount } = extra;
   await pool.query(
