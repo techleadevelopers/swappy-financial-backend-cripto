@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { config } from './config.js';
 import { publish } from './queue.js';
 import { getCachedPrice } from './workers/priceWorker.js';
-import { createOrder, getOrder, updateOrderStatus, nextDerivationIndex, createSweep } from './db.js';
+import { createOrder, getOrder, updateOrderStatus, nextDerivationIndex, createSweep, addEvent, hasEvent } from './db.js';
 import { httpLogger } from './logger.js';
 import { deriveTronAddress, isTronAddress, tronWeb } from './tron.js';
 
@@ -24,6 +24,14 @@ app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; }
 }));
 app.use(httpLogger);
+
+function isValidHmac(secret, raw, signature) {
+  if (!secret || !signature) return false;
+  const digest = crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  const sigBuf = Buffer.from(signature, 'hex');
+  const digBuf = Buffer.from(digest, 'hex');
+  return sigBuf.length === digBuf.length && crypto.timingSafeEqual(sigBuf, digBuf);
+}
 
 const orderLimiter = rateLimit({
   windowMs: config.orderRateLimitWindowMs,
@@ -72,6 +80,12 @@ app.post('/api/order', orderLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Parâmetros inválidos', details: parseResult.error.issues });
   }
   const { amountBRL, address, network = 'TRON', asset = 'USDT', pixCpf, pixPhone } = parseResult.data;
+  const normalizedNetwork = network.toUpperCase();
+  const normalizedAsset = asset.toUpperCase();
+
+  if (normalizedNetwork !== 'TRON' || normalizedAsset !== 'USDT') {
+    return res.status(400).json({ error: 'Somente pedidos TRON/USDT sÃ£o suportados' });
+  }
 
   if (amountBRL < config.orderMinBrl || amountBRL > config.orderMaxBrl) {
     return res.status(400).json({ error: `Valor fora dos limites (${config.orderMinBrl} - ${config.orderMaxBrl} BRL)` });
@@ -79,7 +93,7 @@ app.post('/api/order', orderLimiter, async (req, res) => {
 
   let depositAddress = address;
   let derivationIndex = null;
-  if (network === 'TRON') {
+  if (normalizedNetwork === 'TRON') {
     if (!depositAddress) {
       derivationIndex = await nextDerivationIndex();
       try {
@@ -109,8 +123,8 @@ app.post('/api/order', orderLimiter, async (req, res) => {
     amountBRL,
     btcAmount,
     address: depositAddress,
-    asset,
-    network,
+    asset: normalizedAsset,
+    network: normalizedNetwork,
     rateLocked: btcRate,
     rateLockExpiresAt: new Date(Date.now() + config.rateLockSec * 1000),
     createdAt: new Date(),
@@ -132,7 +146,7 @@ app.post('/api/order', orderLimiter, async (req, res) => {
     pixKey: order.pixKey,
     qrCodeUrl: order.qrCodeUrl,
     depositAddress,
-    network
+    network: normalizedNetwork
   });
 });
 
@@ -148,6 +162,14 @@ app.get('/api/order/:id', (req, res) => {
 
 // Registrar depósito detectado (stub)
 app.post('/api/order/:id/deposit', async (req, res) => {
+  const secret = config.tronHmacSecret;
+  if (!secret) return res.status(400).json({ error: 'TRON_HMAC_SECRET não configurado' });
+  const raw = req.rawBody || Buffer.from('');
+  const signature = req.headers['x-internal-hmac'];
+  if (!isValidHmac(secret, raw, signature)) {
+    return res.status(401).json({ error: 'Assinatura inválida' });
+  }
+
   const DepositSchema = z.object({
     txHash: z.string().min(3),
     amount: z.number().positive()
@@ -156,6 +178,14 @@ app.post('/api/order/:id/deposit', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Payload inválido', details: parsed.error.issues });
   const order = await getOrder(req.params.id);
   if (!order) return res.status(404).json({ error: 'Ordem não encontrada' });
+
+  const idemKey = req.headers['x-idempotency-key'];
+  if (idemKey) {
+    const exists = await hasEvent(order.id, 'idempotency', 'key', idemKey);
+    if (exists) return res.status(200).json({ ok: true, duplicate: true });
+    await addEvent(order.id, 'idempotency', { key: idemKey, endpoint: 'deposit' });
+  }
+
   if (order.status !== 'aguardando_deposito') {
     return res.status(400).json({ error: `Status atual não permite depósito: ${order.status}` });
   }
@@ -167,6 +197,14 @@ app.post('/api/order/:id/deposit', async (req, res) => {
 
 // Registrar payout PIX (stub)
 app.post('/api/order/:id/payout', async (req, res) => {
+  const secret = config.tronHmacSecret;
+  if (!secret) return res.status(400).json({ error: 'TRON_HMAC_SECRET não configurado' });
+  const raw = req.rawBody || Buffer.from('');
+  const signature = req.headers['x-internal-hmac'];
+  if (!isValidHmac(secret, raw, signature)) {
+    return res.status(401).json({ error: 'Assinatura inválida' });
+  }
+
   const PayoutSchema = z.object({
     providerId: z.string().min(1),
     status: z.enum(['concluída', 'erro']),
@@ -176,6 +214,14 @@ app.post('/api/order/:id/payout', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Payload inválido', details: parsed.error.issues });
   const order = await getOrder(req.params.id);
   if (!order) return res.status(404).json({ error: 'Ordem não encontrada' });
+
+  const idemKey = req.headers['x-idempotency-key'];
+  if (idemKey) {
+    const exists = await hasEvent(order.id, 'idempotency', 'key', idemKey);
+    if (exists) return res.status(200).json({ ok: true, duplicate: true });
+    await addEvent(order.id, 'idempotency', { key: idemKey, endpoint: 'payout' });
+  }
+
   if (order.status !== 'pago') {
     return res.status(400).json({ error: `Status atual não permite payout: ${order.status}` });
   }
@@ -189,24 +235,35 @@ app.post('/api/order/:id/payout', async (req, res) => {
 });
 
 // Webhook PIX (PagBank) com HMAC e idempotência básica
-app.post('/api/pix/webhook', (req, res) => {
+app.post('/api/pix/webhook', async (req, res) => {
   if (!config.webhookSecret) return res.status(400).json({ error: 'WEBHOOK_SECRET não configurado' });
   const signature = req.headers['x-pagbank-signature'];
   const raw = req.rawBody || Buffer.from('');
   const hmac = crypto.createHmac('sha256', config.webhookSecret).update(raw).digest('hex');
-  if (signature !== hmac) return res.status(401).json({ error: 'Assinatura inválida' });
+  if (!signature || signature !== hmac) return res.status(401).json({ error: 'Assinatura inválida' });
   let payload;
   try { payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body; }
   catch { return res.status(400).json({ error: 'JSON inválido' }); }
   const { orderId, status, providerId, error } = payload || {};
-  if (!orderId || !status) return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
+  if (!orderId || !status || !providerId) return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
+
+  const duplicated = await hasEvent(orderId, 'webhook.provider', 'providerId', providerId);
+  if (duplicated) return res.status(200).json({ ok: true, duplicate: true });
+
   const statusNorm = status.toLowerCase();
-  const op = statusNorm.startsWith('concl') ? updateOrderStatus(orderId, 'concluída', { txHash: providerId || 'pix-webhook' })
-    : statusNorm === 'erro' || statusNorm === 'error'
-      ? updateOrderStatus(orderId, 'erro', { error: error || 'payout erro' })
-      : null;
-  if (!op) return res.status(400).json({ error: 'Status desconhecido' });
-  op.then(() => res.json({ ok: true })).catch(() => res.status(500).json({ error: 'Falha ao atualizar ordem' }));
+  try {
+    if (statusNorm.startsWith('concl')) {
+      await updateOrderStatus(orderId, 'concluída', { txHash: providerId || 'pix-webhook' });
+    } else if (statusNorm === 'erro' || statusNorm === 'error') {
+      await updateOrderStatus(orderId, 'erro', { error: error || 'payout erro' });
+    } else {
+      return res.status(400).json({ error: 'Status desconhecido' });
+    }
+    await addEvent(orderId, 'webhook.provider', { providerId, status: statusNorm, raw: payload });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Falha ao atualizar ordem', details: err.message });
+  }
 });
 
 // Endpoint interno para registrar sweep (stub) - protegido por HMAC
