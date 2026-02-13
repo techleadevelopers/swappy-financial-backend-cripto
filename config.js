@@ -29,7 +29,8 @@ const EnvSchema = z.object({
   TRON_XPUB: z.string().optional(),
   TRON_HMAC_SECRET: z.string().optional(),
   PAGSEGURO_API_TOKEN: z.string().optional(),
-  PAGSEGURO_API_BASE_URL: z.string().optional()
+  PAGSEGURO_API_BASE_URL: z.string().optional(),
+  ENABLE_SWEEP_STUB: z.string().optional()
 });
 
 const env = EnvSchema.parse(process.env);
@@ -59,5 +60,6 @@ export const config = {
   tronXpub: env.TRON_XPUB,
   tronHmacSecret: env.TRON_HMAC_SECRET,
   pagSeguroToken: env.PAGSEGURO_API_TOKEN,
-  pagSeguroBaseUrl: env.PAGSEGURO_API_BASE_URL || 'https://api.pagseguro.com'
+  pagSeguroBaseUrl: env.PAGSEGURO_API_BASE_URL || 'https://api.pagseguro.com',
+  enableSweepStub: (env.ENABLE_SWEEP_STUB || '').toLowerCase() === 'true'
 };
