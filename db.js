@@ -20,8 +20,8 @@ export async function initSchema() {
 
 export async function createOrder(order) {
   const text = `
-    INSERT INTO orders (id, status, amount_brl, btc_amount, address, asset, network, rate_locked, rate_lock_expires_at, created_at, pix_cpf, pix_phone)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    INSERT INTO orders (id, status, amount_brl, btc_amount, address, asset, network, rate_locked, rate_lock_expires_at, created_at, pix_cpf, pix_phone, derivation_index)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
     RETURNING *`;
   const values = [
     order.id,
@@ -35,7 +35,8 @@ export async function createOrder(order) {
     order.rateLockExpiresAt,
     order.createdAt,
     order.pixCpf || null,
-    order.pixPhone || null
+    order.pixPhone || null,
+    order.derivationIndex ?? null
   ];
   await pool.query(text, values);
   await addEvent(order.id, 'order.created', { amountBRL: order.amountBRL, btcAmount: order.btcAmount });
@@ -69,4 +70,14 @@ export async function addEvent(orderId, type, payload) {
 
 export async function closePool() {
   await pool.end();
+}
+
+export async function nextDerivationIndex() {
+  const { rows } = await pool.query('SELECT COALESCE(MAX(derivation_index), -1) + 1 AS idx FROM orders');
+  return rows[0]?.idx ?? 0;
+}
+
+export async function getPendingOrders() {
+  const { rows } = await pool.query("SELECT * FROM orders WHERE status = 'aguardando_deposito'");
+  return rows;
 }
