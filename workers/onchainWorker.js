@@ -1,5 +1,5 @@
 import TronWebPkg from 'tronweb';
-import { subscribe, publish } from '../queue.js';
+import { publish } from '../queue.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { updateOrderStatus, getPendingOrders, getCursor, saveCursor } from '../db.js';
@@ -12,68 +12,71 @@ const tronWeb = new TronWeb({
   privateKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 });
 
-const watchers = new Map(); // orderId -> intervalId
+let polling = false;
 
-async function checkOrderOnchain(order, cursor) {
-  if (order.status !== 'aguardando_deposito' || order.network !== 'TRON') return { cursor };
-  let newCursor = cursor;
-  try {
-    const latest = await tronWeb.trx.getCurrentBlock();
-    const latestNumber = latest.block_header.raw_data.number;
-    // Cursor: se não houver, começa alguns blocos atrás
-    const startBlock = newCursor ? Math.max(0, newCursor - 10) : Math.max(0, latestNumber - 2000);
-    const events = await tronWeb.getEventResult(config.tronUsdtContract, {
-      eventName: 'Transfer',
-      sort: 'block_timestamp',
-      limit: 200
-    });
-    for (const ev of events) {
-      newCursor = Math.max(newCursor || 0, ev.block_number);
-      const toBase58 = tronWeb.address.fromHex(ev.result.to);
-      if (toBase58 !== order.address) continue;
-      const amount = Number(ev.result.value) / (10 ** config.tronUsdtDecimals);
-      const confs = latestNumber - ev.block_number;
-      if (confs < config.tronConfirmations) continue;
-      const expected = Number(order.btc_amount || order.btcAmount);
-      if (amount + 1e-6 < expected) continue;
-      await updateOrderStatus(order.id, 'pago', { depositTx: ev.transaction_id, depositAmount: amount });
-      publish('onchain.detected', { orderId: order.id, txHash: ev.transaction_id, amount });
-      publish('payout.requested', { orderId: order.id });
-      stopWatcher(order.id);
-      break;
-    }
-    // Atualiza cursor para último bloco visto
-    if (newCursor) {
-      await saveCursor('TRON', Math.max(newCursor, latestNumber));
-    }
-  } catch (err) {
-    logger.error({ err, orderId: order.id }, 'Erro ao checar TRON events');
+async function processTransferEvents(ordersByAddress, latestConfirmedBlock) {
+  if (!config.tronUsdtContract) {
+    logger.warn('TRON_USDT_CONTRACT não configurado; pulando listener on-chain');
+    return;
   }
-  return { cursor: newCursor };
-}
+  let cursor = await getCursor('TRON');
+  const startBlock = cursor != null ? cursor + 1 : Math.max(0, latestConfirmedBlock - 2000);
 
-function startWatcher(order) {
-  if (watchers.has(order.id)) return;
-  let cursor = null;
-  const intervalId = setInterval(async () => {
-    const res = await checkOrderOnchain(order, cursor);
-    cursor = res.cursor ?? cursor;
-  }, 10_000);
-  watchers.set(order.id, intervalId);
-}
-
-function stopWatcher(orderId) {
-  const id = watchers.get(orderId);
-  if (id) clearInterval(id);
-  watchers.delete(orderId);
+  for (let blockNumber = startBlock; blockNumber <= latestConfirmedBlock; blockNumber++) {
+    let fingerprint = null;
+    do {
+      const result = await tronWeb.event.getEventsByContractAddress(config.tronUsdtContract, {
+        eventName: 'Transfer',
+        blockNumber,
+        orderBy: 'block_timestamp,asc',
+        onlyConfirmed: true,
+        limit: 200,
+        fingerprint
+      });
+      const events = result?.data || [];
+      for (const ev of events) {
+        const toAddr = tronWeb.address.fromHex(ev.result.to);
+        const order = ordersByAddress.get(toAddr);
+        if (!order || (order.status && order.status !== 'aguardando_deposito')) continue;
+        const decimals = config.tronUsdtDecimals || 6;
+        const amount = Number(ev.result.value) / (10 ** decimals);
+        const expected = Number(order.btc_amount ?? order.btcAmount ?? 0);
+        if (amount + 1e-6 < expected) continue;
+        const confs = latestConfirmedBlock - ev.block_number;
+        if (confs < 0) continue;
+        await updateOrderStatus(order.id, 'pago', { depositTx: ev.transaction_id, depositAmount: amount });
+        publish('onchain.detected', { orderId: order.id, txHash: ev.transaction_id, amount });
+        publish('payout.requested', { orderId: order.id });
+        ordersByAddress.delete(toAddr);
+      }
+      fingerprint = result?.meta?.fingerprint;
+    } while (fingerprint);
+    await saveCursor('TRON', blockNumber);
+  }
 }
 
 export function startOnchainWorker() {
-  subscribe('order.created', async (order) => {
-    if (order.network === 'TRON') startWatcher(order);
-  });
-  // carregar ordens pendentes na inicialização
-  getPendingOrders().then(orders => {
-    orders.filter(o => o.network === 'TRON').forEach(startWatcher);
-  }).catch(err => logger.error({ err }, 'Erro ao carregar pendentes'));
+  setInterval(async () => {
+    if (polling) return;
+    polling = true;
+    try {
+      const pending = await getPendingOrders();
+      const tronPending = pending.filter(o => (o.network || '').toUpperCase() === 'TRON');
+      const latest = await tronWeb.trx.getCurrentBlock();
+      const latestNumber = latest.block_header.raw_data.number;
+      const latestConfirmedBlock = Math.max(0, latestNumber - config.tronConfirmations);
+
+      if (!tronPending.length) {
+        await saveCursor('TRON', latestConfirmedBlock);
+        return;
+      }
+
+      const ordersByAddress = new Map(tronPending.map(o => [o.address, o]));
+      await processTransferEvents(ordersByAddress, latestConfirmedBlock);
+    } catch (err) {
+      logger.error({ err }, 'Erro ao processar eventos TRON');
+    } finally {
+      polling = false;
+    }
+  }, 10_000);
 }
