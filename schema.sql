@@ -40,6 +40,26 @@ CREATE TABLE IF NOT EXISTS payouts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS onchain_cursor (
+  id SERIAL PRIMARY KEY,
+  network VARCHAR(32) NOT NULL,
+  last_block BIGINT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT onchain_cursor_network_unique UNIQUE(network)
+);
+
+CREATE TABLE IF NOT EXISTS sweeps (
+  id UUID PRIMARY KEY,
+  child_index INT NOT NULL,
+  from_addr TEXT NOT NULL,
+  to_addr TEXT NOT NULL,
+  amount NUMERIC(28,8) NOT NULL,
+  tx_hash TEXT,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Compatibilidade: adiciona coluna se jÃ¡ existir tabela anterior
 DO $$
 BEGIN
