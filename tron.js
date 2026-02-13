@@ -4,7 +4,7 @@ import { config } from './config.js';
 
 const TronWeb = TronWebPkg?.TronWeb || TronWebPkg?.default?.TronWeb || TronWebPkg;
 
-const tronWeb = new TronWeb({
+export const tronWeb = new TronWeb({
   fullHost: config.tronFullNodeUrl || 'https://api.trongrid.io',
   solidityNode: config.tronSolidityUrl || config.tronFullNodeUrl || 'https://api.trongrid.io',
   eventServer: config.tronSolidityUrl || config.tronFullNodeUrl || 'https://api.trongrid.io',
