@@ -1,68 +1,75 @@
-# Swappy Backend (Off-Ramp USDT → PIX)
+# Swappy Backend — Off-Ramp USDT → PIX (TRON)
 
 ## Visão Geral
-Backend Node/Express preparado para off-ramp: o usuário envia cripto (USDT) para a carteira da plataforma, o sistema detecta o depósito on-chain e liquida em PIX. Atualmente em modo stub (sem integrações reais), com arquitetura pronta para evoluir com filas gerenciadas, listener on-chain real e provedor PIX.
+Backend Node/Express para off-ramp: o usuário envia USDT (TRC20) para um endereço derivado via XPUB; detectamos on-chain e liquidamos via PIX (PagBank). Chaves privadas não ficam no app; apenas XPUB para derivar endereços. Payout é via PagBank; sweeps e assinaturas on-chain devem rodar em serviço isolado/HSM.
 
-## Fluxo de Negócio (pretendido)
-1) Criação de ordem (`POST /api/order`):
-   - Recebe `amountBRL`, `address`, opcional `asset`/`network` (default USDT/ERC20) e dados PIX (`pixCpf`, `pixPhone`).
-   - Valida endereço (BTC/ETH), limites min/max, trava cotação USDT/BRL com TTL.
-   - Persiste em Postgres com status `aguardando_deposito`.
-   - Publica evento `order.created`.
-2) Depósito detectado:
-   - Listener on-chain (stub) publica `onchain.detected` e atualiza status para `pago` (via `/api/order/:id/deposit`).
-3) Payout PIX:
-   - Worker payout (stub) consome `payout.requested`, marca `concluída` (via `/api/order/:id/payout`).
-4) Status:
-   - `/api/order/:id` para polling.
-   - `/api/order/:id/stream` (SSE) envia mudanças de status em tempo quase real.
+## Fluxo de Negócio
+1) Criação de ordem (`POST /api/order`)
+   - `amountBRL`, dados PIX (`pixCpf`, `pixPhone`); `network` default TRON, `asset` default USDT.
+   - Se não enviar endereço, derivamos um TRON via `TRON_XPUB`; se enviar, validamos.
+   - Valida limites min/max, trava cotação USDT/BRL com TTL, status `aguardando_deposito`.
+2) Depósito detectado (TRC20)
+   - Listener TRON consulta eventos `Transfer` do contrato USDT, com cursor/paginação e confirmações.
+   - Ao encontrar depósito ≥ esperado: status `pago`, grava `deposit_tx`/`deposit_amount`, publica `onchain.detected` e `payout.requested`.
+3) Payout PIX (PagBank)
+   - `payoutWorker` chama PagBank (ou simula se token ausente); webhook `/api/pix/webhook` com HMAC fecha `concluída` ou `erro`.
+4) Status para o cliente
+   - `GET /api/order/:id` ou SSE `GET /api/order/:id/stream`.
 
 ## Endpoints
 - `GET /api/price` — preço USDT/BRL (CoinGecko) com cache.
-- `POST /api/order` — cria ordem, valida limites e endereço, status `aguardando_deposito`.
+- `POST /api/order` — cria ordem, gera/valida endereço TRON, status `aguardando_deposito`.
 - `GET /api/order/:id` — consulta ordem.
 - `GET /api/order/:id/stream` — SSE de status.
-- `POST /api/order/:id/deposit` — marca depósito detectado (stub).
-- `POST /api/order/:id/payout` — marca payout PIX (stub).
-- `POST /api/pix/webhook` — stub de webhook PagBank com verificação HMAC.
-- `GET /healthz` / `GET /readyz` — health/readiness simples.
+- `POST /api/order/:id/deposit` — permite registrar depósito detectado (útil para testes).
+- `POST /api/order/:id/payout` — marca payout PIX (fallback/manual).
+- `POST /api/pix/webhook` — webhook PagBank com HMAC (`PIX_WEBHOOK_SECRET`).
+- `POST /internal/sweep` — cria sweep pending (HMAC `TRON_HMAC_SECRET`) para varrer endereços filhos.
+- `GET /healthz` / `GET /readyz` — readiness checa DB e nó TRON.
 
-## Segurança e Endurecimento
-- Helmet, rate limit global e por rota de criação, CORS restrito.
-- Validação Zod de payloads e schema de ambiente.
-- Logger estruturado (Pino).
-- WEBHOOK_SECRET para HMAC simples; webhook PagBank valida assinatura.
+## Workers
+- `onchainWorker`: listener TRON TRC20 com cursor; detecta depósito e dispara payout.
+- `payoutWorker`: integra PagBank (simula se token ausente).
+- `priceWorker`: cacheia preço USDT/BRL.
+- `sweepWorker`: stub que marca sweeps como enviados; em produção deve chamar signer/broadcaster.
 
-## Persistência e Eventos
-- Postgres: tabelas `orders`, `order_events`, `payouts` (schema em `server/schema.sql`).
-- Event bus em memória (`queue.js`) com workers stubs:
-  - `onchainWorker`: simula depósito após delay, publica `payout.requested`.
-  - `payoutWorker`: simula payout, marca `concluída`.
-  - `priceWorker`: cacheia preço USDT/BRL.
+## Persistência
+- Postgres: `orders`, `order_events`, `payouts`, `onchain_cursor`, `sweeps` (schema em `server/schema.sql`).
+- Event bus em memória (`queue.js`) para orquestrar workers.
 
-## Configuração (env)
-Principais vars (ver `.env.example`):
+## Configuração (.env.example)
+Principais vars:
 ```
 DATABASE_URL=postgres://user:pass@host:5432/db
-ALLOWED_ORIGINS=http://localhost:5173
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 WEBHOOK_SECRET=...
 ORDER_MIN_BRL / ORDER_MAX_BRL
 RATE_LIMIT_WINDOW_MS / RATE_LIMIT_MAX
 ORDER_RATE_LIMIT_WINDOW_MS / ORDER_RATE_LIMIT_MAX
-PAGSEGURO_API_TOKEN / PIX_WEBHOOK_SECRET (preencher apenas em ambiente seguro)
+# Tron / USDT TRC20
+TRON_FULLNODE_URL=...
+TRON_SOLIDITY_URL=...
+TRON_USDT_CONTRACT=...
+TRON_USDT_DECIMALS=6
+TRON_CONFIRMATIONS=20
+TRON_XPUB=seu-xpub
+TRON_HMAC_SECRET=...
+# PagBank
+PAGSEGURO_API_TOKEN=...
+PAGSEGURO_API_BASE_URL=https://api.pagseguro.com
+PIX_WEBHOOK_SECRET=...
 ```
 
-## Roadmap (para produção)
-- Listener on-chain real (USDT nas redes suportadas) + confirmações.
-- Integração PIX PagBank oficial (sandbox → prod) com webhooks assinados/idempotência.
+## Roadmap Prod (essencial)
+- Assinador/broadcaster isolado (HSM/KMS/MPC) para sweeps TRON.
+- Listener TRON com checkpoint persistente (cursor) e paginação robusta.
+- PagBank oficial + webhook assinado/idempotência.
 - Fila gerenciada (SQS/PubSub/Kafka) e Redis para cache/locks.
-- Auth HMAC/JWT robusto em webhooks internos; health/readiness completos; métricas/trace.
-- SSE/WebSocket com backplane real (Redis/pubsub).
+- Auth HMAC/JWT entre serviços internos; métricas/trace; limites de spend no signer.
 
 ## Como rodar local
 ```bash
 npm install
-psql "$DATABASE_URL" -f server/schema.sql
-node server/server.js
+psql "$DATABASE_URL" -f schema.sql
+node server.js
 ```
-
