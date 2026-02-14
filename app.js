@@ -14,12 +14,12 @@ import { httpLogger } from './logger.js';
 import { deriveTronAddress, isTronAddress, tronWeb } from './tron.js';
 
 export const app = express();
+app.set('trust proxy', 1); // necessário para X-Forwarded-For em ambiente com proxy (Railway/NGINX)
 app.use(helmet());
 app.use(rateLimit({
   windowMs: config.rateLimitWindowMs,
   max: config.rateLimitMax
 }));
-app.use(cors());
 app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; }
 }));
