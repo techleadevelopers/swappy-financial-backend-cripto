@@ -21,6 +21,8 @@ const EnvSchema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().positive().default(100),
   ORDER_RATE_LIMIT_WINDOW_MS: z.coerce.number().positive().default(60_000),
   ORDER_RATE_LIMIT_MAX: z.coerce.number().positive().default(20),
+  FEE_BPS: z.coerce.number().int().nonnegative().default(0), // basis points (1% = 100)
+  FEE_MIN_BRL: z.coerce.number().nonnegative().default(0),
   PIX_MAX_ORDERS_PER_24H: z.coerce.number().int().positive().default(5),
   PIX_MAX_BRL_PER_24H: z.coerce.number().positive().default(20000),
   ORDER_HOLD_SEC_FOR_NEW_DEST: z.coerce.number().int().positive().default(180),
@@ -68,6 +70,8 @@ export const config = {
   rateLimitMax: env.RATE_LIMIT_MAX,
   orderRateLimitWindowMs: env.ORDER_RATE_LIMIT_WINDOW_MS,
   orderRateLimitMax: env.ORDER_RATE_LIMIT_MAX,
+  feeBps: env.FEE_BPS,
+  feeMinBrl: env.FEE_MIN_BRL,
   pixMaxOrders24h: env.PIX_MAX_ORDERS_PER_24H,
   pixMaxBrl24h: env.PIX_MAX_BRL_PER_24H,
   orderHoldSecForNewDest: env.ORDER_HOLD_SEC_FOR_NEW_DEST,
