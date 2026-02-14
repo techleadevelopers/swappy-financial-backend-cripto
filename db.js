@@ -20,14 +20,16 @@ export async function initSchema() {
 
 export async function createOrder(order) {
   const text = `
-    INSERT INTO orders (id, status, amount_brl, btc_amount, address, asset, network, rate_locked, rate_lock_expires_at, created_at, pix_cpf, pix_phone, derivation_index)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    INSERT INTO orders (id, status, amount_brl, btc_amount, fee_brl, payout_brl, address, asset, network, rate_locked, rate_lock_expires_at, created_at, pix_cpf, pix_phone, derivation_index)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
     RETURNING *`;
   const values = [
     order.id,
     order.status,
     order.amountBRL,
     order.btcAmount,
+    order.feeBRL,
+    order.payoutBRL,
     order.address,
     order.asset,
     order.network,
