@@ -1,6 +1,6 @@
 <div align="center">
 <img src="https://res.cloudinary.com/limpeja/image/upload/v1770993671/swap_1_mvctri.png" alt="swap Logo" width="280">
-<h1>Deliver instans Buy and Sell payment Pix Off-Ramp USDT → PIX (TRON)</h1></div>
+<h1>Deliver instans Buy and Sell payment Pix USDT → PIX (TRON)</h1></div>
 
 
 ## Visão Geral
