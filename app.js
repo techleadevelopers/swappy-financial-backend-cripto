@@ -117,7 +117,12 @@ app.post('/api/order', orderLimiter, async (req, res) => {
   }
 
   const btcRate = await getCachedPrice();
-  const btcAmount = amountBRL / btcRate; // mantém nome legado, representa USDT
+  const feeBRL = Math.max(config.feeMinBrl, amountBRL * (config.feeBps / 10_000));
+  const payoutBRL = amountBRL - feeBRL;
+  if (payoutBRL <= 0) {
+    return res.status(400).json({ error: 'Valor insuficiente após taxa' });
+  }
+  const btcAmount = payoutBRL / btcRate; // mantém nome legado, representa USDT líquido
   const id = uuidv4();
 
   const order = {
@@ -125,6 +130,8 @@ app.post('/api/order', orderLimiter, async (req, res) => {
     status: 'aguardando_deposito',
     amountBRL,
     btcAmount,
+    feeBRL,
+    payoutBRL,
     address: depositAddress,
     asset: normalizedAsset,
     network: normalizedNetwork,
@@ -152,6 +159,8 @@ app.post('/api/order', orderLimiter, async (req, res) => {
     btcAmount,
     rate: btcRate,
     status: order.status,
+    feeBRL,
+    payoutBRL,
     pixKey: order.pixKey,
     qrCodeUrl: order.qrCodeUrl,
     depositAddress,
