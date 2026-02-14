@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { config } from './config.js';
 import { publish } from './queue.js';
 import { getCachedPrice } from './workers/priceWorker.js';
-import { createOrder, getOrder, updateOrderStatus, nextDerivationIndex, createSweep, addEvent, hasEvent, statsPixLast24h, countCompletedOrdersForPix } from './db.js';
+import { createOrder, getOrder, updateOrderStatus, nextDerivationIndex, createSweep, addEvent, hasEvent, statsPixLast24h, countCompletedOrdersForPix, createBuyOrder, getBuyOrder, updateBuyOrderStatus } from './db.js';
 import { httpLogger } from './logger.js';
 import { deriveTronAddress, isTronAddress, tronWeb } from './tron.js';
 
@@ -61,6 +61,95 @@ app.get('/api/price', async (_req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'API error' });
   }
+});
+
+// Criar ordem BUY (PIX -> USDT)
+app.post('/api/buy', async (req, res) => {
+  const BuySchema = z.object({
+    amountBRL: z.number().positive(),
+    asset: z.enum(['USDT', 'BTC']).default('USDT'),
+    address: z.string().min(10),
+    pixCpf: z.string().optional(),
+    pixPhone: z.string().optional()
+  }).refine(data => data.pixCpf || data.pixPhone, {
+    message: 'pixCpf ou pixPhone é obrigatório',
+    path: ['pix']
+  });
+  const parsed = BuySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Parâmetros inválidos', details: parsed.error.issues });
+  const { amountBRL, asset, address, pixCpf, pixPhone } = parsed.data;
+
+  if (asset !== 'USDT') return res.status(400).json({ error: 'Asset não suportado nesta fase (apenas USDT)' });
+  // Validar endereço TRON USDT
+  if (!isTronAddress(address)) return res.status(400).json({ error: 'Endereço TRON inválido' });
+
+  if (amountBRL < config.orderMinBrl || amountBRL > config.orderMaxBrl) {
+    return res.status(400).json({ error: `Valor fora dos limites (${config.orderMinBrl} - ${config.orderMaxBrl} BRL)` });
+  }
+
+  const rate = await getCachedPrice();
+  const feeBRL = Math.max(config.feeMinBrl, amountBRL * (config.feeBps / 10_000));
+  const payoutBRL = amountBRL - feeBRL;
+  if (payoutBRL <= 0) return res.status(400).json({ error: 'Valor insuficiente após taxa' });
+  const cryptoAmount = payoutBRL / rate;
+
+  const buy = await createBuyOrder({
+    status: 'aguardando_pix',
+    amountBRL,
+    feeBRL,
+    payoutBRL,
+    cryptoAmount,
+    asset,
+    destAddress: address,
+    rateLocked: rate,
+    rateLockExpiresAt: new Date(Date.now() + config.rateLockSec * 1000),
+    pixPayload: { pixKey: 'chavepix@nexswap.com', qrCodeUrl: '/images/qrcode.png' }
+  });
+
+  publish('buy.created', buy);
+
+  res.json({
+    buyId: buy.id,
+    status: buy.status,
+    feeBRL,
+    payoutBRL,
+    rate,
+    cryptoAmount,
+    pixKey: buy.pix_payload?.pixKey || 'chavepix@nexswap.com',
+    qrCodeUrl: buy.pix_payload?.qrCodeUrl || '/images/qrcode.png'
+  });
+});
+
+// Consultar buy
+app.get('/api/buy/:id', async (req, res) => {
+  const buy = await getBuyOrder(req.params.id);
+  if (!buy) return res.status(404).json({ error: 'Compra não encontrada' });
+  res.json(buy);
+});
+
+// SSE status buy
+app.get('/api/buy/:id/stream', async (req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive'
+  });
+  res.flushHeaders();
+
+  let lastStatus = null;
+  const interval = setInterval(async () => {
+    const buy = await getBuyOrder(req.params.id);
+    if (!buy) return;
+    if (buy.status !== lastStatus) {
+      lastStatus = buy.status;
+      res.write(`data: ${JSON.stringify({ status: buy.status, txHash: buy.tx_hash_out })}\n\n`);
+    }
+  }, 2000);
+
+  req.on('close', () => {
+    clearInterval(interval);
+    res.end();
+  });
 });
 
 // Criar ordem
@@ -281,6 +370,34 @@ app.post('/api/pix/webhook', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'Falha ao atualizar ordem', details: err.message });
+  }
+});
+
+// Webhook PIX (PagBank) - BUY
+app.post('/api/pix/webhook/buy', async (req, res) => {
+  if (!config.webhookSecret) return res.status(400).json({ error: 'WEBHOOK_SECRET não configurado' });
+  const signature = req.headers['x-pagbank-signature'];
+  const raw = req.rawBody || Buffer.from('');
+  const hmac = crypto.createHmac('sha256', config.webhookSecret).update(raw).digest('hex');
+  if (!signature || signature !== hmac) return res.status(401).json({ error: 'Assinatura inválida' });
+  let payload;
+  try { payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body; }
+  catch { return res.status(400).json({ error: 'JSON inválido' }); }
+  const { buyId, status, providerId, error } = payload || {};
+  if (!buyId || !status) return res.status(400).json({ error: 'Campos obrigatórios ausentes' });
+  const statusNorm = status.toLowerCase();
+  try {
+    if (statusNorm.startsWith('concl')) {
+      await updateBuyOrderStatus(buyId, 'pago_pix', { txHashOut: providerId || 'pix-webhook' });
+      publish('buy.paid', { buyOrderId: buyId, providerId });
+    } else if (statusNorm === 'erro' || statusNorm === 'error') {
+      await updateBuyOrderStatus(buyId, 'erro', { error: error || 'pix erro' });
+    } else {
+      return res.status(400).json({ error: 'Status desconhecido' });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Falha ao atualizar buy', details: err.message });
   }
 });
 
