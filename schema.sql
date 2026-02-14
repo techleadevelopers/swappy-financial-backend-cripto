@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS orders (
   status VARCHAR(32) NOT NULL,
   amount_brl NUMERIC(18,2) NOT NULL,
   btc_amount NUMERIC(28,8) NOT NULL,
+  fee_brl NUMERIC(18,2),
+  payout_brl NUMERIC(18,2),
   address TEXT NOT NULL,
   asset VARCHAR(16) NOT NULL DEFAULT 'USDT',
   network VARCHAR(32) NOT NULL DEFAULT 'ERC20',
@@ -68,6 +70,12 @@ DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='derivation_index') THEN
     ALTER TABLE orders ADD COLUMN derivation_index INT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='fee_brl') THEN
+    ALTER TABLE orders ADD COLUMN fee_brl NUMERIC(18,2);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='payout_brl') THEN
+    ALTER TABLE orders ADD COLUMN payout_brl NUMERIC(18,2);
   END IF;
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sweeps' AND column_name='idempotency_key') THEN
     ALTER TABLE sweeps ADD COLUMN idempotency_key TEXT;
