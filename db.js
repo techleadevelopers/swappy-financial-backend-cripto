@@ -186,3 +186,57 @@ export async function ordersToSweep() {
   `);
   return rows;
 }
+
+// Buy orders (on-ramp)
+export async function createBuyOrder(buy) {
+  const { rows } = await pool.query(
+    `INSERT INTO buy_orders (id, status, amount_brl, fee_brl, payout_brl, crypto_amount, asset, dest_address, rate_locked, rate_lock_expires_at, pix_payload)
+     VALUES (gen_random_uuid(), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     RETURNING *`,
+    [
+      buy.status,
+      buy.amountBRL,
+      buy.feeBRL,
+      buy.payoutBRL,
+      buy.cryptoAmount,
+      buy.asset,
+      buy.destAddress,
+      buy.rateLocked,
+      buy.rateLockExpiresAt,
+      buy.pixPayload || null
+    ]
+  );
+  return rows[0];
+}
+
+export async function getBuyOrder(id) {
+  const { rows } = await pool.query('SELECT * FROM buy_orders WHERE id = $1', [id]);
+  return rows[0] || null;
+}
+
+export async function updateBuyOrderStatus(id, status, extra = {}) {
+  const { txHashOut, error } = extra;
+  await pool.query(
+    `UPDATE buy_orders SET status = $2,
+                            tx_hash_out = COALESCE($3, tx_hash_out),
+                            error = COALESCE($4, error),
+                            updated_at = now()
+     WHERE id = $1`,
+    [id, status, txHashOut || null, error || null]
+  );
+}
+
+export async function addBuyEvent(buyOrderId, type, payload) {
+  await pool.query(
+    `INSERT INTO buy_order_events (id, buy_order_id, type, payload)
+     VALUES (gen_random_uuid(), $1, $2, $3)`,
+    [buyOrderId, type, payload]
+  );
+}
+
+export async function listPendingBuys() {
+  const { rows } = await pool.query(
+    `SELECT * FROM buy_orders WHERE status = 'pago_pix'`
+  );
+  return rows;
+}
