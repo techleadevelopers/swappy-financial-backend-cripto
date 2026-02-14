@@ -16,7 +16,7 @@ export function startPayoutWorker() {
         publish('payout.settled', { orderId: order.id, pixStatus: 'concluída' });
         return;
       }
-      const brlValue = Number(order.amount_brl ?? order.amountBRL ?? 0);
+      const brlValue = Number(order.payout_brl ?? order.payoutBRL ?? order.amount_brl ?? order.amountBRL ?? 0);
       const payload = {
         txId: order.id,
         value: { currency: 'BRL', amount: brlValue },
