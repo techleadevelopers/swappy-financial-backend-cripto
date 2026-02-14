@@ -2,7 +2,7 @@
 <img src="https://res.cloudinary.com/limpeja/image/upload/v1770993671/swap_1_mvctri.png" alt="swap Logo" width="480"> 
 </div>
 
-## Deliver instans Buy and Sell payment Pix USDT → PIX (TRON)
+<h3>Deliver instans Buy and Sell payment Pix USDT → PIX (TRON)</h3></div>
 Backend Node/Express para off-ramp: o usuário envia USDT (TRC20) para um endereço derivado via XPUB; detectamos on-chain e liquidamos via PIX (PagBank). Chaves privadas não ficam no app; apenas XPUB para derivar endereços. Payout é via PagBank; sweeps e assinaturas on-chain devem rodar em serviço isolado/HSM.
 
 ## Fluxo de Negócio (atual)
