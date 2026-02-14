@@ -65,6 +65,33 @@ CREATE TABLE IF NOT EXISTS sweeps (
   order_id UUID
 );
 
+-- Buy (on-ramp)
+CREATE TABLE IF NOT EXISTS buy_orders (
+  id UUID PRIMARY KEY,
+  status VARCHAR(32) NOT NULL,
+  amount_brl NUMERIC(18,2) NOT NULL,
+  fee_brl NUMERIC(18,2),
+  payout_brl NUMERIC(18,2),
+  crypto_amount NUMERIC(28,8) NOT NULL,
+  asset VARCHAR(16) NOT NULL DEFAULT 'USDT',
+  dest_address TEXT NOT NULL,
+  rate_locked NUMERIC(28,8) NOT NULL,
+  rate_lock_expires_at TIMESTAMPTZ NOT NULL,
+  pix_payload JSONB,
+  tx_hash_out TEXT,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS buy_order_events (
+  id UUID PRIMARY KEY,
+  buy_order_id UUID REFERENCES buy_orders(id),
+  type VARCHAR(32) NOT NULL,
+  payload JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Compatibilidade: adiciona coluna se jÃ¡ existir tabela anterior
 DO $$
 BEGIN
@@ -85,5 +112,33 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sweeps' AND column_name='order_id') THEN
     ALTER TABLE sweeps ADD COLUMN order_id UUID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='buy_orders') THEN
+    CREATE TABLE buy_orders (
+      id UUID PRIMARY KEY,
+      status VARCHAR(32) NOT NULL,
+      amount_brl NUMERIC(18,2) NOT NULL,
+      fee_brl NUMERIC(18,2),
+      payout_brl NUMERIC(18,2),
+      crypto_amount NUMERIC(28,8) NOT NULL,
+      asset VARCHAR(16) NOT NULL DEFAULT 'USDT',
+      dest_address TEXT NOT NULL,
+      rate_locked NUMERIC(28,8) NOT NULL,
+      rate_lock_expires_at TIMESTAMPTZ NOT NULL,
+      pix_payload JSONB,
+      tx_hash_out TEXT,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='buy_order_events') THEN
+    CREATE TABLE buy_order_events (
+      id UUID PRIMARY KEY,
+      buy_order_id UUID REFERENCES buy_orders(id),
+      type VARCHAR(32) NOT NULL,
+      payload JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
   END IF;
 END$$;
