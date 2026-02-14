@@ -18,8 +18,10 @@ export function deriveTronAddress(index) {
   const hd = HDKey.fromExtendedKey(config.tronXpub);
   const child = hd.deriveChild(index);
   if (!child.publicKey) throw new Error('Failed to derive public key');
-  const hex = TronWeb.utils.crypto.computeAddress(child.publicKey);
-  const base58 = TronWeb.utils.crypto.getBase58CheckAddress(hex);
+  const utils = tronWeb?.utils || TronWeb?.utils;
+  if (!utils?.crypto) throw new Error('TronWeb utils.crypto unavailable');
+  const hex = utils.crypto.computeAddress(child.publicKey);
+  const base58 = utils.crypto.getBase58CheckAddress(hex);
   return base58;
 }
 
