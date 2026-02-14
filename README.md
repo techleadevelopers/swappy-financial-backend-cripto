@@ -1,4 +1,6 @@
-# Swappy Backend — Off-Ramp USDT → PIX (TRON)
+
+<img src="https://res.cloudinary.com/limpeja/image/upload/v1770993671/swap_1_mvctri.png" alt="swap Logo" width="280">
+# Swappy Backend — Deliver instans Buy and Sell payment Pix Off-Ramp USDT → PIX (TRON)
 
 ## Visão Geral
 Backend Node/Express para off-ramp: o usuário envia USDT (TRC20) para um endereço derivado via XPUB; detectamos on-chain e liquidamos via PIX (PagBank). Chaves privadas não ficam no app; apenas XPUB para derivar endereços. Payout é via PagBank; sweeps e assinaturas on-chain devem rodar em serviço isolado/HSM.
