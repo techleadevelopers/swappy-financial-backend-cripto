@@ -12,7 +12,9 @@ import { config } from './config.js';
   startPriceWorker();
   startOnchainWorker();
   startPayoutWorker();
-  if (config.enableSweepStub) {
+  if (config.enableSweepWorker) {
+    startSweepWorker();
+  } else if (config.enableSweepStub) {
     startSweepWorker();
   }
   const port = process.env.PORT || 3000;
