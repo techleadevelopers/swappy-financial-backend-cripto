@@ -57,7 +57,10 @@ CREATE TABLE IF NOT EXISTS sweeps (
   tx_hash TEXT,
   status VARCHAR(32) NOT NULL DEFAULT 'pending',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  idempotency_key TEXT,
+  amount_trx_fee NUMERIC(28,8),
+  order_id UUID
 );
 
 -- Compatibilidade: adiciona coluna se jÃ¡ existir tabela anterior
@@ -65,5 +68,14 @@ DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='derivation_index') THEN
     ALTER TABLE orders ADD COLUMN derivation_index INT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sweeps' AND column_name='idempotency_key') THEN
+    ALTER TABLE sweeps ADD COLUMN idempotency_key TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sweeps' AND column_name='amount_trx_fee') THEN
+    ALTER TABLE sweeps ADD COLUMN amount_trx_fee NUMERIC(28,8);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='sweeps' AND column_name='order_id') THEN
+    ALTER TABLE sweeps ADD COLUMN order_id UUID;
   END IF;
 END$$;
