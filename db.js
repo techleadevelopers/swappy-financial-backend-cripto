@@ -150,10 +150,10 @@ export async function saveCursor(network, lastBlock) {
 
 export async function createSweep(data) {
   const { rows } = await pool.query(
-    `INSERT INTO sweeps (id, child_index, from_addr, to_addr, amount, status)
-     VALUES (gen_random_uuid(), $1, $2, $3, $4, 'pending')
+    `INSERT INTO sweeps (id, child_index, from_addr, to_addr, amount, status, order_id)
+     VALUES (gen_random_uuid(), $1, $2, $3, $4, 'pending', $5)
      RETURNING *`,
-    [data.childIndex, data.fromAddr, data.toAddr, data.amount]
+    [data.childIndex, data.fromAddr, data.toAddr, data.amount, data.orderId || null]
   );
   return rows[0];
 }
@@ -168,4 +168,19 @@ export async function markSweep(id, status, txHash = null) {
     `UPDATE sweeps SET status = $2, tx_hash = COALESCE($3, tx_hash), updated_at = now() WHERE id = $1`,
     [id, status, txHash]
   );
+}
+
+export async function ordersToSweep() {
+  const { rows } = await pool.query(`
+    SELECT o.*
+    FROM orders o
+    WHERE o.status = 'pago'
+      AND o.derivation_index IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM sweeps s
+        WHERE s.order_id = o.id
+          AND s.status IN ('pending','sent','confirmed')
+      )
+  `);
+  return rows;
 }
